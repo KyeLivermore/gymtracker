@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Gym Tracker</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%231a1a1a'/><text x='50' y='78' font-size='75' font-family='Arial,sans-serif' font-weight='bold' fill='white' text-anchor='middle'>K</text></svg>">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #fff; }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const STORAGE_KEY     = "gym_tracker_data";
+const TEMPLATES_KEY   = "gym_tracker_templates";
+const ARCHIVE_KEY     = "gym_tracker_archive";
+const RECENT_KEY      = "gym_tracker_recent_ex";
+const PROGRESS_KEY    = "gym_tracker_progress";
+const BW_KEY          = "gym_tracker_bw";
+const WEEKLY_SETS_KEY = "gym_tracker_weekly_sets";
+
+const DEFAULT_TEMPLATES = [
+  { id:"ppl_push", name:"Push Day",   exercises:[] },
+  { id:"ppl_pull", name:"Pull Day",   exercises:[] },
+  { id:"ppl_legs", name:"Leg Day",    exercises:[] },
+  { id:"upper",    name:"Upper Body", exercises:[] },
+  { id:"lower",    name:"Lower Body", exercises:[] },
+  { id:"sharms",   name:"Sharms Day", exercises:[] },
+];
+
+const MUSCLE_GROUPS = { "Push Day":"Chest | Shoulders | Triceps", "Pull Day":"Back | Biceps", "Leg Day":"Quads | Hamstrings | Calves", "Sharms Day":"Shoulders | Arms" };
+const MUSCLE_MAP = [
+  { label:"Chest",     keywords:["chest"] },
+  { label:"Back",      keywords:["back"] },
+  { label:"Shoulders", keywords:["shoulder"] },
+  { label:"Biceps",    keywords:["bicep"] },
+  { label:"Triceps",   keywords:["tricep"] },
+  { label:"Legs",      keywords:["leg"] },
+  { label:"Calves",    keywords:["calf"] },
+];
+const SET_GOAL = 20;
+const BAR_COLOR = "#555555";
+const COLORS = ["#5DCAA5","#7F77DD","#D85A30","#378ADD","#BA7517","#D4537E","#639922"];
+const NAV_H = 58;
+const ARCHIVE_BAR_H = 56;
+
+const ls = {
+  get:(k,fb)=>{ try{ const r=localStorage.getItem(k); return r?JSON.parse(r):fb; }catch{ return fb; } },
+  set:(k,v)=>{ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} },
+};
+
+function calcVol(sets){ return sets.reduce((s,st)=>s+(parseFloat(st.weight)||0)*(parseInt(st.reps)||0)*(parseInt(st.sets)||1),0); }
+function calc1RM(w,r){ if(!w||!r)return 0; return Math.round(w*(1+r/30)); }
+function fmtDate(d){ const[y,m,dy]=d.split("-"); return `${dy}/${m}/${y.slice(2)}`; }
+function parseLocal(ds){ const[y,m,d]=ds.split("-"); return new Date(+y,+m-1,+d); }
+function fmtLocal(ds){ return parseLocal(ds).toLocaleDateString("en-AU",{day:"numeric",month:"short"}); }
+function dateFmt(dt){ return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; }
+function getSunday(){ const n=new Date(),d=n.getDay(),diff=d===0?0:7-d; return dateFmt(new Date(n.getFullYear(),n.getMonth(),n.getDate()+diff)); }
+function getMonday(){ const n=new Date(),d=n.getDay(),diff=d===0?-6:1-d; return dateFmt(new Date(n.getFullYear(),n.getMonth(),n.getDate()+diff)); }
+function gwStart(ds){ const dt=parseLocal(ds),dy=dt.getDay(),diff=dy===0?-6:1-dy; return dateFmt(new Date(dt.getFullYear(),dt.getMonth(),dt.getDate()+diff)); }
+
+function PencilIcon(){ return <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9.917 1.75a1.237 1.237 0 0 1 1.75 1.75L4.083 11.083 1.75 11.667l.583-2.334L9.917 1.75Z" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/></svg>; }
+function TrashIcon(){ return <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1.75 3.5h10.5M5.25 3.5V2.333a.583.583 0 0 1 .583-.583h2.334a.583.583 0 0 1 .583.583V3.5M2.917 3.5l.583 8.167h7l.583-8.167" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/><path d="M5.833 6.417v3.5M8.167 6.417v3.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/></svg>; }
+
+function Modal({ title, message, confirmLabel="Confirm", confirmColor="#E24B4A", onConfirm, onCancel }){
+  return <div style={{position:"fixed",inset:0,background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200}}>
+    <div style={{textAlign:"center",padding:"0 32px"}}>
+      <p style={{fontWeight:500,fontSize:18,margin:"0 0 8px"}}>{title}</p>
+      <p style={{fontSize:14,color:"#666",margin:"0 0 24px"}}>{message}</p>
+      <div style={{display:"flex",gap:12,justifyContent:"center"}}>
+        <button style={{padding:"10px 24px",fontSize:14,border:"0.5px solid rgba(0,0,0,0.25)",borderRadius:8,cursor:"pointer",background:"transparent"}} onClick={onCancel}>Cancel</button>
+        <button style={{padding:"10px 24px",fontSize:14,border:"none",borderRadius:8,cursor:"pointer",background:confirmColor,color:"#fff"}} onClick={onConfirm}>{confirmLabel}</button>
+      </div>
+    </div>
+  </div>;
+}
+
+function ExerciseCard({ ex, prs, s, onChange, onRemove, latestBW, prevData }){
+  const [open,setOpen]=useState(true);
+  function upd(si,f,v){ const sets=[...ex.sets]; sets[si]={...sets[si],[f]:v}; onChange({...ex,sets}); }
+
+  // compute volume delta vs previous session
+  function currentVol(){ return ex.sets.reduce((t,st)=>t+(parseFloat(st.weight)||0)*(parseInt(st.reps)||0)*(parseInt(st.sets)||1),0); }
+  const prevVol=prevData?prevData.sets.reduce((t,st)=>t+(parseFloat(st.weight)||0)*(parseInt(st.reps)||0)*(parseInt(st.sets)||1),0):null;
+  const volDelta=prevVol!==null?Math.round(currentVol()-prevVol):null;
+
+  return <div style={{...s.card,marginBottom:10}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:open?10:0}}>
+      <input style={{...s.input,fontWeight:500,flex:1,marginRight:8}} placeholder="Exercise name" value={ex.name} onChange={e=>onChange({...ex,name:e.target.value})}/>
+      <div style={{display:"flex",gap:6}}>
+        <button style={s.btnSm} onClick={()=>setOpen(o=>!o)}>{open?"−":"+"}</button>
+        <button style={{...s.btnSm,color:"#e24b4a"}} onClick={onRemove}>✕</button>
+      </div>
+    </div>
+    {prevData&&open&&<div style={{background:"#f5f5f5",borderRadius:8,padding:"7px 10px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div>
+        <span style={{fontSize:11,color:"#888",fontWeight:500,textTransform:"uppercase",letterSpacing:"0.05em"}}>Last session · </span>
+        {prevData.sets.map((st,i)=><span key={i} style={{fontSize:12,color:"#444"}}>{i>0&&<span style={{color:"#bbb"}}> / </span>}{st.weight}kg × {st.reps}{parseInt(st.sets)>1?` ×${st.sets}`:""}</span>)}
+      </div>
+      {volDelta!==null&&<span style={{fontSize:12,fontWeight:500,color:volDelta>0?"#0F6E56":volDelta<0?"#e24b4a":"#888",marginLeft:8,flexShrink:0}}>{volDelta>0?"+":""}{volDelta} kg vol</span>}
+    </div>}
+    {open&&<>
+      <div style={{display:"grid",gridTemplateColumns:"2fr 2fr 3fr 1fr",gap:6,marginBottom:6}}>
+        {["Sets","Reps","Weight (kg)",""].map((h,i)=><p key={i} style={{margin:0,fontSize:11,color:"#666",textAlign:"center"}}>{h}</p>)}
+        {ex.sets.map((set,si)=>[
+          <input key={"s"+si} type="number" min="1" style={{...s.input,textAlign:"center",padding:"6px"}} value={set.sets} onChange={e=>upd(si,"sets",e.target.value)}/>,
+          <input key={"r"+si} type="number" min="1" style={{...s.input,textAlign:"center",padding:"6px"}} value={set.reps} onChange={e=>upd(si,"reps",e.target.value)}/>,
+          <div key={"w"+si} style={{display:"flex",gap:3}}>
+            <input type="number" min="0" step="0.5" style={{...s.input,textAlign:"center",padding:"6px",flex:1}} placeholder="kg" value={set.weight} onChange={e=>upd(si,"weight",e.target.value)}/>
+            {latestBW&&<button style={{...s.btnSm,padding:"4px 6px",fontSize:10,flexShrink:0}} onClick={()=>upd(si,"weight",latestBW)}>BW</button>}
+          </div>,
+          <button key={"x"+si} style={{...s.btnSm,color:"#e24b4a",padding:"4px"}} onClick={()=>onChange({...ex,sets:ex.sets.filter((_,i)=>i!==si)})}>✕</button>
+        ])}
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <button style={s.btnSm} onClick={()=>onChange({...ex,sets:[...ex.sets,{...ex.sets[ex.sets.length-1]}]})}>+ Set</button>
+        {prs[ex.name]&&<span style={{fontSize:11,color:"#666"}}>PR: {prs[ex.name]} kg est. 1RM</span>}
+      </div>
+    </>}
+  </div>;
+}
+
+function WorkoutForm({ workout, setWorkout, prs, recentExercises, archive, setArchive, pushRecentEx, onSave, onDiscard, s, tb, latestBW, workouts }){
+  // build a lookup: exercise name -> most recent sets logged (excluding current session)
+  function getPrevData(name){
+    for(const w of workouts){
+      const found=w.exercises.find(e=>e.name.toLowerCase()===name.toLowerCase());
+      if(found) return found;
+    }
+    return null;
+  }
+  const [showPicker,setShowPicker]=useState(false);
+  const [pickerSearch,setPickerSearch]=useState("");
+  const [addingNew,setAddingNew]=useState(false);
+  const [newExName,setNewExName]=useState("");
+  const [confirmDiscard,setConfirmDiscard]=useState(false);
+  function addFromPicker(name){ setWorkout(w=>({...w,exercises:[...w.exercises,{name,sets:[{sets:3,reps:10,weight:""}]}]})); pushRecentEx(name); setShowPicker(false); setPickerSearch(""); }
+  function addNewEx(){ if(!newExName.trim())return; const n=newExName.trim(); if(!archive.includes(n)) setArchive(a=>[...a,n].sort()); addFromPicker(n); setNewExName(""); setAddingNew(false); }
+  const filtered=recentExercises.filter(e=>e.toLowerCase().includes(pickerSearch.toLowerCase()));
+  const exactMatch=archive.some(e=>e.toLowerCase()===pickerSearch.toLowerCase().trim());
+  return <div style={s.app}>
+    <div style={{padding:"20px 16px 12px",borderBottom:"0.5px solid rgba(0,0,0,0.12)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,paddingBottom:10,borderBottom:"0.5px solid rgba(0,0,0,0.12)"}}>
+        <input style={{...s.input,fontSize:20,fontWeight:500,border:"none",background:"transparent",padding:"0",flex:1}} value={workout.name} onChange={e=>setWorkout(w=>({...w,name:e.target.value}))} placeholder="Workout name"/>
+        <span style={{color:"#666",lineHeight:0}}><PencilIcon/></span>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10}}>
+        <input type="date" style={{...s.input,fontSize:13,width:"auto"}} value={workout.date} onChange={e=>setWorkout(w=>({...w,date:e.target.value}))}/>
+        <button style={{...s.btnPrimary,whiteSpace:"nowrap"}} onClick={onSave}>Save</button>
+      </div>
+    </div>
+    <div style={s.section}>
+      {workout.exercises.map((ex,ei)=>(
+        <ExerciseCard key={ei} ex={ex} prs={prs} s={s} latestBW={latestBW} prevData={getPrevData(ex.name)}
+          onChange={u=>setWorkout(w=>{const exs=[...w.exercises];exs[ei]=u;return{...w,exercises:exs};})}
+          onRemove={()=>setWorkout(w=>({...w,exercises:w.exercises.filter((_,i)=>i!==ei)}))}/>
+      ))}
+      <div style={{position:"relative",marginBottom:8}}>
+        <button style={{...s.btn,width:"100%"}} onClick={()=>{setShowPicker(p=>!p);setPickerSearch("");setAddingNew(false);}}>+ Add exercise</button>
+        {showPicker&&<>
+          <div style={{position:"absolute",top:"100%",left:0,right:0,background:"#fff",border:"0.5px solid rgba(0,0,0,0.12)",borderRadius:8,zIndex:50,maxHeight:300,display:"flex",flexDirection:"column"}}>
+            <div style={{padding:"8px 10px",borderBottom:"0.5px solid rgba(0,0,0,0.12)",display:"flex",alignItems:"center",gap:8}}>
+              <button style={{...s.btnSm,lineHeight:0,padding:"5px 7px",flexShrink:0}} onClick={()=>{setShowPicker(false);setAddingNew(false);}}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M11 7H3M3 7l3.5-3.5M3 7l3.5 3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </button>
+              <input autoFocus style={{...s.input,flex:1,fontSize:13}} placeholder="Search exercises..." value={pickerSearch} onChange={e=>setPickerSearch(e.target.value)}/>
+            </div>
+            <div style={{overflowY:"auto",flex:1}}>
+              {filtered.map(ex=><div key={ex} style={{padding:"10px 12px",fontSize:14,cursor:"pointer",color:"#1a1a1a",borderBottom:"0.5px solid rgba(0,0,0,0.12)"}} onClick={()=>addFromPicker(ex)}>{ex}</div>)}
+              {filtered.length===0&&!addingNew&&<p style={{padding:"10px 12px",fontSize:13,color:"#666",margin:0}}>No matches.</p>}
+            </div>
+            {!exactMatch&&<div style={{borderTop:"0.5px solid rgba(0,0,0,0.12)",padding:"8px 10px",background:"#fff",borderRadius:"0 0 8px 8px"}}>
+              {addingNew
+                ?<div style={{display:"flex",gap:8}}><input autoFocus style={{...s.input,flex:1,fontSize:13}} placeholder="Exercise name..." value={newExName} onChange={e=>setNewExName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addNewEx()}/><button style={s.btnPrimary} onClick={addNewEx}>Add</button><button style={s.btnSm} onClick={()=>setAddingNew(false)}>Cancel</button></div>
+                :<button style={{...s.btn,width:"100%",fontSize:13}} onClick={()=>{setAddingNew(true);setNewExName(pickerSearch);}}>+ Add new exercise</button>
+              }
+            </div>}
+          </div>
+          <div style={{position:"fixed",inset:0,zIndex:49}} onClick={()=>{setShowPicker(false);setAddingNew(false);}}/>
+        </>}
+      </div>
+      {!showPicker&&<>
+        <button style={{...s.btnSm,color:"#e24b4a"}} onClick={()=>setConfirmDiscard(true)}>Discard</button>
+        <textarea style={{...s.input,marginTop:12,minHeight:60,resize:"vertical"}} placeholder="Session notes..." value={workout.notes||""} onChange={e=>setWorkout(w=>({...w,notes:e.target.value}))}/>
+      </>}
+    </div>
+    {confirmDiscard&&<Modal title="Discard changes?" message="All unsaved progress will be lost." confirmLabel="Discard" onConfirm={()=>{setConfirmDiscard(false);onDiscard();}} onCancel={()=>setConfirmDiscard(false)}/>}
+  </div>;
+}
+
+function LineChart({ data, valueKey, color="#5DCAA5" }){
+  if(data.length<2)return null;
+  const cw=440,ch=140,pH=16,pB=22;
+  const vals=data.map(d=>d[valueKey]),mn=Math.min(...vals),mx=Math.max(...vals),rng=mx-mn||1;
+  const pts=data.map((d,i)=>({x:30+(i/(data.length-1))*(cw-40),y:pH+(1-(d[valueKey]-mn)/rng)*ch,date:d.date}));
+  const path=pts.map((p,i)=>`${i===0?"M":"L"}${p.x},${p.y}`).join(" ");
+  return <svg viewBox={`0 0 ${cw} ${ch+pH+pB}`} width="100%" style={{display:"block"}}>
+    {[mn,mn+(mx-mn)/2,mx].map((v,i)=>{ const y=pH+(1-(v-mn)/rng)*ch; return <g key={i}><line x1={30} x2={cw-10} y1={y} y2={y} stroke="rgba(0,0,0,0.08)" strokeWidth={0.5}/><text x={28} y={y+4} textAnchor="end" fontSize={9} fill="#999">{Math.round(v)}</text></g>; })}
+    <path d={`${path} L${pts[pts.length-1].x},${pH+ch} L${pts[0].x},${pH+ch} Z`} fill={color} opacity={0.1}/>
+    <path d={path} fill="none" stroke={color} strokeWidth={2}/>
+    {pts.map((p,i)=><g key={i}><circle cx={p.x} cy={p.y} r={4} fill={color}/><text x={p.x} y={pH+ch+pB-2} textAnchor="middle" fontSize={9} fill="#999">{p.date.slice(5)}</text></g>)}
+  </svg>;
+}
+
+function MuscleSetBars({ counts, goal, small }){
+  return MUSCLE_MAP.map(m=>{
+    const sets=Math.min(counts[m.label]||0,goal), pct=sets/goal;
+    return <div key={m.label} style={{marginBottom:small?6:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:small?2:4}}>
+        <span style={{fontSize:small?11:13,fontWeight:500}}>{m.label}</span>
+        <span style={{fontSize:small?10:12,color:"#666"}}>{sets}/{goal}</span>
+      </div>
+      <div style={{height:small?5:8,background:"#f0f0f0",borderRadius:99,overflow:"hidden"}}>
+        <div style={{height:"100%",width:`${pct*100}%`,background:BAR_COLOR,borderRadius:99,transition:"width 0.3s ease"}}/>
+      </div>
+    </div>;
+  });
+}
+
+function App(){
+  const [workouts,setWorkouts]   = useState(()=>ls.get(STORAGE_KEY,[]));
+  const [templates,setTemplates] = useState(()=>{
+    const wiped=ls.get("gym_tracker_templates_wiped_v1",false);
+    if(!wiped){ ls.set(TEMPLATES_KEY,DEFAULT_TEMPLATES); ls.set("gym_tracker_templates_wiped_v1",true); return DEFAULT_TEMPLATES; }
+    return ls.get(TEMPLATES_KEY,DEFAULT_TEMPLATES);
+  });
+  const [archive,setArchive]     = useState(()=>{
+    const wiped=ls.get("gym_tracker_archive_wiped_v2",false);
+    if(!wiped){ ls.set(ARCHIVE_KEY,[]); ls.set("gym_tracker_archive_wiped_v2",true); return []; }
+    const saved=ls.get(ARCHIVE_KEY,null);
+    if(saved&&saved.length>0) return saved;
+    const fromWorkouts=(ls.get(STORAGE_KEY,[])||[]).flatMap(w=>w.exercises.map(e=>e.name.trim())).filter(Boolean);
+    return [...new Set([...fromWorkouts])].sort();
+  });
+  const [recentEx,setRecentEx]   = useState(()=>ls.get(RECENT_KEY,[]));
+  const [progress,setProgress]   = useState(()=>ls.get(PROGRESS_KEY,[]));
+  const [bw,setBw]               = useState(()=>ls.get(BW_KEY,null));
+  const [weeklySets,setWeeklySets] = useState(()=>ls.get(WEEKLY_SETS_KEY,[]));
+  const [view,setView]           = useState("home");
+  const [activeWorkout,setActiveWorkout] = useState(null);
+  const [editData,setEditData]   = useState(null);
+  const [viewingWorkout,setViewingWorkout] = useState(null);
+  const [confirmDelete,setConfirmDelete] = useState(null);
+  const [historyFilter,setHistoryFilter] = useState("");
+  const [archiveSearch,setArchiveSearch] = useState("");
+  const [editingEx,setEditingEx] = useState(null);
+  const [editExName,setEditExName] = useState("");
+  const [editingBw,setEditingBw] = useState(false);
+  const [bwInput,setBwInput]     = useState("");
+  const [pForm,setPForm]         = useState({weight:"",cals:"",protein:"",carbs:"",fats:""});
+  const [showPForm,setShowPForm] = useState(false);
+  const [pChartKey,setPChartKey] = useState("weight");
+  const [editingTemplate,setEditingTemplate] = useState(null);
+  const [editTemplateName,setEditTemplateName] = useState("");
+  const [editTemplateExercises,setEditTemplateExercises] = useState("");
+  const [addingTemplate,setAddingTemplate] = useState(false);
+  const [newTemplateName,setNewTemplateName] = useState("");
+  const [newTemplateExercises,setNewTemplateExercises] = useState("");
+  const [showWeeklySetsSection,setShowWeeklySetsSection] = useState(false);
+  const [expandedWeek,setExpandedWeek] = useState(null);
+  const [editingWeekSets,setEditingWeekSets] = useState(null);
+  const [editWeekCounts,setEditWeekCounts] = useState({});
+  const [showWeeklyWorkouts,setShowWeeklyWorkouts] = useState(false);
+  const [expandedWorkoutWeek,setExpandedWorkoutWeek] = useState(null);
+
+  useEffect(()=>ls.set(STORAGE_KEY,workouts),[workouts]);
+  useEffect(()=>ls.set(TEMPLATES_KEY,templates),[templates]);
+  useEffect(()=>ls.set(ARCHIVE_KEY,archive),[archive]);
+  useEffect(()=>ls.set(RECENT_KEY,recentEx),[recentEx]);
+  useEffect(()=>ls.set(PROGRESS_KEY,progress),[progress]);
+  useEffect(()=>ls.set(BW_KEY,bw),[bw]);
+  useEffect(()=>ls.set(WEEKLY_SETS_KEY,weeklySets),[weeklySets]);
+
+  useEffect(()=>{
+    const monStr=getMonday();
+    const lMon=parseLocal(monStr); lMon.setDate(lMon.getDate()-7);
+    const lSun=new Date(lMon.getFullYear(),lMon.getMonth(),lMon.getDate()+6);
+    const lMonStr=dateFmt(lMon), lSunStr=dateFmt(lSun);
+    if(weeklySets.some(w=>w.monStr===lMonStr))return;
+    const lastWeek=workouts.filter(w=>w.date>=lMonStr&&w.date<=lSunStr);
+    if(lastWeek.length===0)return;
+    const counts={}; MUSCLE_MAP.forEach(m=>{counts[m.label]=0;});
+    lastWeek.forEach(w=>w.exercises.forEach(e=>{
+      const name=e.name.toLowerCase();
+      const matched=MUSCLE_MAP.find(m=>m.keywords.some(kw=>name.includes(kw)));
+      if(matched) counts[matched.label]+=e.sets.reduce((s,st)=>s+(parseInt(st.sets)||1),0);
+    }));
+    setWeeklySets(prev=>[{monStr:lMonStr,sunStr:lSunStr,counts},...prev]);
+  },[workouts]);
+
+  const recentExercises=[...recentEx.filter(e=>archive.includes(e)),...archive.filter(e=>!recentEx.includes(e))];
+  const latestBW=bw;
+
+  function getPRs(){ const p={}; workouts.forEach(w=>w.exercises.forEach(e=>e.sets.forEach(s=>{ const r=calc1RM(parseFloat(s.weight),parseInt(s.reps)); if(!p[e.name]||r>p[e.name])p[e.name]=r; }))); return p; }
+  const prs=getPRs();
+
+  function pushRecentEx(name){ setRecentEx(prev=>[name,...prev.filter(e=>e!==name)]); }
+  function fmtName(t){ const n=new Date(),day=n.toLocaleDateString("en-AU",{weekday:"short"}).toLowerCase(),mon=n.toLocaleDateString("en-AU",{month:"short"}).toLowerCase(),short=t?t.split(" ")[0].toLowerCase():"workout"; return `${short} | ${day} | ${mon} ${n.getDate()}`; }
+  function startWorkout(template=null){ setActiveWorkout({name:fmtName(template?.name),date:new Date().toISOString().split("T")[0],notes:"",exercises:template?template.exercises.map(n=>({name:n,sets:[{sets:3,reps:10,weight:""}]})):[]}); setView("log"); }
+  function repeatWorkout(prev){ const base=prev.name.split(" | ")[0]; setActiveWorkout({name:fmtName(base.charAt(0).toUpperCase()+base.slice(1)),date:new Date().toISOString().split("T")[0],notes:"",exercises:prev.exercises.map(e=>({name:e.name,sets:e.sets.map(s=>({...s}))}))}); setView("log"); }
+  function saveWorkout(){
+    if(!activeWorkout)return;
+    const cleaned={...activeWorkout,id:Date.now(),exercises:activeWorkout.exercises.filter(e=>e.name.trim())};
+    setWorkouts(p=>[cleaned,...p]);
+    const names=cleaned.exercises.map(e=>e.name);
+    setRecentEx(prev=>{ const next=[...prev]; names.forEach(n=>{ const i=next.indexOf(n); if(i>-1)next.splice(i,1); next.unshift(n); }); return next; });
+    setActiveWorkout(null); setView("home");
+  }
+  function openEdit(w){ setEditData({...w,exercises:w.exercises.map(e=>({...e,sets:e.sets.map(s=>({...s}))}))}); setViewingWorkout(w); setView("editWorkout"); }
+  function saveEdit(){ if(!editData)return; setWorkouts(p=>p.map(w=>w.id===editData.id?editData:w)); setViewingWorkout(editData); setEditData(null); setView("viewWorkout"); }
+  function doDelete(id){ setWorkouts(p=>p.filter(w=>w.id!==id)); setConfirmDelete(null); if(viewingWorkout?.id===id){setViewingWorkout(null);setView("home");} }
+  function delClick(e,id){ e.stopPropagation(); setConfirmDelete(id); }
+  function getWeekBounds(){
+    const n=new Date(),d=n.getDay(),diff=d===0?-6:1-d;
+    const mon=new Date(n.getFullYear(),n.getMonth(),n.getDate()+diff);
+    const sun=new Date(mon.getFullYear(),mon.getMonth(),mon.getDate()+6);
+    return {mon,monStr:dateFmt(mon),sunStr:dateFmt(sun),day:d};
+  }
+  function getMuscleWeeklySets(){
+    const {monStr,sunStr}=getWeekBounds(); const counts={};
+    MUSCLE_MAP.forEach(m=>{counts[m.label]=0;});
+    workouts.filter(w=>w.date>=monStr&&w.date<=sunStr).forEach(w=>w.exercises.forEach(e=>{
+      const name=e.name.toLowerCase();
+      const matched=MUSCLE_MAP.find(m=>m.keywords.some(kw=>name.includes(kw)));
+      if(matched) counts[matched.label]+=e.sets.reduce((s,st)=>s+(parseInt(st.sets)||1),0);
+    }));
+    return counts;
+  }
+  function wLabel(ws){
+    const m=parseLocal(ws),su=new Date(m.getFullYear(),m.getMonth(),m.getDate()+6);
+    const fmt=d=>d.toLocaleDateString("en-AU",{day:"numeric",month:"short"});
+    const tw=gwStart(dateFmt(new Date())), lmDt=parseLocal(tw); lmDt.setDate(lmDt.getDate()-7);
+    const lmStr=dateFmt(lmDt);
+    if(ws===tw) return `This week (${fmt(m)} – ${fmt(su)})`;
+    if(ws===lmStr) return `Last week (${fmt(m)} – ${fmt(su)})`;
+    return `${fmt(m)} – ${fmt(su)}`;
+  }
+
+  const s={
+    app:{fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",maxWidth:480,margin:"0 auto",paddingBottom:NAV_H+ARCHIVE_BAR_H+16},
+    nav:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:"#fff",borderTop:"0.5px solid rgba(0,0,0,0.12)",display:"flex",zIndex:10,height:NAV_H},
+    navBtn:a=>({flex:1,padding:"10px 4px 8px",fontSize:11,border:"none",background:"none",cursor:"pointer",color:a?"#1a1a1a":"#888",fontWeight:a?500:400,fontFamily:"inherit"}),
+    header:{padding:"20px 16px 8px",borderBottom:"0.5px solid rgba(0,0,0,0.12)",marginBottom:8},
+    h1:{margin:0,fontSize:22,fontWeight:500},
+    section:{padding:"12px 16px"},
+    card:{background:"#fff",border:"0.5px solid rgba(0,0,0,0.12)",borderRadius:12,padding:"12px 14px",marginBottom:10},
+    input:{width:"100%",boxSizing:"border-box",padding:"8px 10px",fontSize:14,border:"0.5px solid rgba(0,0,0,0.12)",borderRadius:8,background:"#f5f5f5",color:"#1a1a1a",fontFamily:"inherit"},
+    btn:{padding:"8px 16px",fontSize:14,border:"0.5px solid rgba(0,0,0,0.25)",borderRadius:8,cursor:"pointer",fontFamily:"inherit",fontWeight:400,background:"transparent",color:"#1a1a1a"},
+    btnPrimary:{padding:"8px 16px",fontSize:14,border:"none",borderRadius:8,cursor:"pointer",fontFamily:"inherit",fontWeight:400,background:"#1a1a1a",color:"#fff"},
+    btnSm:{padding:"4px 10px",fontSize:12,border:"0.5px solid rgba(0,0,0,0.12)",borderRadius:8,cursor:"pointer",background:"transparent",color:"#666",fontFamily:"inherit"},
+    metricCard:{background:"#f5f5f5",borderRadius:8,padding:"10px 12px",flex:1,textAlign:"center"},
+    metricNum:{fontSize:22,fontWeight:500,margin:0},
+    metricLabel:{fontSize:12,color:"#666",margin:"2px 0 0"},
+  };
+  const nab={...s.app,paddingBottom:NAV_H+16};
+  const tb={padding:"5px 7px",border:"0.5px solid rgba(0,0,0,0.12)",borderRadius:8,cursor:"pointer",background:"transparent",color:"#666",display:"flex",alignItems:"center",justifyContent:"center",lineHeight:0};
+  const tile={background:"transparent",border:"none",padding:"16px 12px",cursor:"pointer",textAlign:"center",fontFamily:"inherit",color:"#1a1a1a",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",width:"100%",minHeight:90};
+  const navItems=[{id:"home",label:"Home"},{id:"history",label:"History"},{id:"progress",label:"Progress"},{id:"templates",label:"Templates"},{id:"prs",label:"PRs"}];
+  function Nav(){ return <nav style={s.nav}>{navItems.map(it=><button key={it.id} style={s.navBtn(view===it.id)} onClick={()=>setView(it.id)}>{it.label}</button>)}</nav>; }
+  const formProps={prs,recentExercises,archive,setArchive,pushRecentEx,s,tb,latestBW,workouts};
+
+  if(view==="log"&&activeWorkout) return <WorkoutForm {...formProps} workout={activeWorkout} setWorkout={setActiveWorkout} onSave={saveWorkout} onDiscard={()=>{setActiveWorkout(null);setView("home");}}/>;
+  if(view==="editWorkout"&&editData) return <WorkoutForm {...formProps} workout={editData} setWorkout={setEditData} onSave={saveEdit} onDiscard={()=>{setEditData(null);setView("viewWorkout");}}/>;
+
+  if(view==="viewWorkout"&&viewingWorkout){
+    const w=viewingWorkout;
+    const tv=Math.round(w.exercises.reduce((s,e)=>s+calcVol(e.sets),0));
+    const totalSets=w.exercises.reduce((s,e)=>s+e.sets.reduce((a,st)=>a+(parseInt(st.sets)||1),0),0);
+    if(confirmDelete) return <div style={{...nab,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh"}}><div style={{textAlign:"center",padding:"0 32px"}}><p style={{fontWeight:500,fontSize:18,margin:"0 0 8px"}}>Delete workout?</p><p style={{fontSize:14,color:"#666",margin:"0 0 24px"}}>"{w.name}" will be permanently removed.</p><div style={{display:"flex",gap:12,justifyContent:"center"}}><button style={{...s.btn,padding:"10px 24px"}} onClick={()=>setConfirmDelete(null)}>Cancel</button><button style={{...s.btn,padding:"10px 24px",background:"#E24B4A",color:"#fff",border:"none"}} onClick={()=>doDelete(w.id)}>Delete</button></div></div></div>;
+    return <div style={nab}>
+      <div style={{padding:"12px 16px 0"}}><button style={s.btnSm} onClick={()=>setView("home")}>← Back</button></div>
+      <div style={{padding:"10px 16px 10px",borderBottom:"0.5px solid rgba(0,0,0,0.12)",marginBottom:8,display:"flex",alignItems:"center"}}>
+        <div style={{flex:1,minWidth:0}}><h2 style={{margin:"0 0 2px",fontSize:22,fontWeight:500}}>{w.name}</h2><p style={{margin:0,fontSize:11,color:"#666",whiteSpace:"nowrap"}}>{fmtDate(w.date)} | {tv.toLocaleString()} kg vol | {totalSets} sets</p></div>
+        <div style={{display:"flex",gap:4,marginLeft:12,flexShrink:0}}><button style={tb} onClick={()=>openEdit(w)}><PencilIcon/></button><button style={tb} onClick={e=>delClick(e,w.id)}><TrashIcon/></button></div>
+      </div>
+      <div style={s.section}>
+        {w.exercises.map((e,i)=>{ const ev=Math.round(calcVol(e.sets)); return <div key={i} style={s.card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}><p style={{margin:0,fontWeight:500}}>{e.name}</p><span style={{fontSize:12,color:"#666"}}>{ev.toLocaleString()} kg vol</span></div>
+          <div style={{display:"grid",gridTemplateColumns:"2fr 2fr 2fr 2fr",gap:4}}>
+            {["Sets","Reps","Weight","Est. 1RM"].map(h=><p key={h} style={{margin:0,fontSize:11,color:"#666"}}>{h}</p>)}
+            {e.sets.map((st,si)=>{ const rm=calc1RM(parseFloat(st.weight),parseInt(st.reps)),isPR=prs[e.name]&&rm>=prs[e.name]; return[
+              <p key={"s"+si} style={{margin:0,fontSize:13}}>{st.sets}</p>,<p key={"r"+si} style={{margin:0,fontSize:13}}>{st.reps}</p>,<p key={"w"+si} style={{margin:0,fontSize:13}}>{st.weight}kg</p>,
+              <p key={"rm"+si} style={{margin:0,fontSize:13}}>{rm}kg{isPR&&<span style={{fontSize:10,background:"#5DCAA522",color:"#0F6E56",padding:"1px 5px",borderRadius:10,fontWeight:500,marginLeft:4}}>PR</span>}</p>
+            ];})}
+          </div>
+        </div>;})}
+        {w.notes&&<p style={{fontSize:13,color:"#666",fontStyle:"italic",marginTop:4}}>{w.notes}</p>}
+        <button style={{...s.btn,width:"100%",marginTop:8}} onClick={()=>repeatWorkout(w)}>Repeat this workout</button>
+      </div>
+    </div>;
+  }
+
+  if(view==="home"){
+    const{mon,monStr,sunStr,day}=getWeekBounds();
+    const sw=workouts.filter(w=>w.date>=monStr&&w.date<=sunStr).length;
+    const de=Math.min(day===0?6:day-1,Math.floor((new Date()-mon)/86400000));
+    const rd=Math.max(0,de+1-sw);
+    const muscleSets=getMuscleWeeklySets();
+    if(confirmDelete){ const wName=workouts.find(w=>w.id===confirmDelete)?.name||""; return <div style={{...s.app,display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh"}}><div style={{textAlign:"center",padding:"0 32px"}}><p style={{fontWeight:500,fontSize:18,margin:"0 0 8px"}}>Delete workout?</p><p style={{fontSize:14,color:"#666",margin:"0 0 24px"}}>"{wName}" will be permanently removed.</p><div style={{display:"flex",gap:12,justifyContent:"center"}}><button style={{...s.btn,padding:"10px 24px"}} onClick={()=>setConfirmDelete(null)}>Cancel</button><button style={{...s.btn,padding:"10px 24px",background:"#E24B4A",color:"#fff",border:"none"}} onClick={()=>doDelete(confirmDelete)}>Delete</button></div></div></div>; }
+    return <div style={s.app}>
+      <div style={s.header}><h1 style={s.h1}>Workout Tracker</h1><p style={{margin:"4px 0 0",fontSize:14,color:"#666"}}>{new Date().toLocaleDateString("en-AU",{weekday:"long",day:"numeric",month:"long"})}</p></div>
+      <div style={s.section}>
+        <div style={{display:"flex",gap:0,marginBottom:16,alignItems:"stretch"}}>
+          <div style={{...s.metricCard,flex:1}}><p style={s.metricNum}>{sw}</p><p style={s.metricLabel}>Sessions this week</p></div>
+          <div style={{width:1,background:"#000",margin:"8px 0"}}/>
+          <div style={{...s.metricCard,flex:1}}><p style={s.metricNum}>{rd}</p><p style={s.metricLabel}>Rest days</p></div>
+          <div style={{width:1,background:"#000",margin:"8px 0"}}/>
+          <div style={{...s.metricCard,flex:1}}><p style={s.metricNum}>{workouts.length}</p><p style={s.metricLabel}>Total sessions</p></div>
+        </div>
+        <div style={{height:1,background:"#000",marginBottom:16}}/>
+        <button style={{...s.btnPrimary,width:"100%",padding:"12px",fontSize:15,marginBottom:16}} onClick={()=>setView("start")}>+ Start workout</button>
+        <p style={{fontSize:11,fontWeight:500,color:"#666",margin:"0 0 10px",textTransform:"uppercase",letterSpacing:"0.06em"}}>Weekly sets</p>
+        <MuscleSetBars counts={muscleSets} goal={SET_GOAL}/>
+        <button style={{...s.btnSm,marginTop:12,width:"100%"}} onClick={()=>{ const{monStr,sunStr}=getWeekBounds(); if(weeklySets.some(w=>w.monStr===monStr))return; setWeeklySets(prev=>[{monStr,sunStr,counts:muscleSets},...prev]); }}>Save this week to history</button>
+      </div>
+      <div style={{position:"fixed",bottom:NAV_H,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,padding:"10px 16px",background:"#fff",borderTop:"0.5px solid rgba(0,0,0,0.12)",boxSizing:"border-box",zIndex:9}}>
+        <button style={{...s.btn,width:"100%"}} onClick={()=>setView("archive")}>Exercise archive</button>
+      </div>
+      <Nav/>
+    </div>;
+  }
+
+  if(view==="start"){
+    function lastForTemplate(t){
+      const prefix=t.name.split(" ")[0].toLowerCase();
+      return workouts.find(w=>w.name.toLowerCase().startsWith(prefix));
+    }
+    const templatesWithHistory=templates.filter(t=>lastForTemplate(t));
+    const pillBtn=(label,onClick,active)=>({
+      padding:"8px 16px",fontSize:13,borderRadius:20,
+      border:active?"none":"0.5px solid rgba(0,0,0,0.2)",
+      background:active?"#1a1a1a":"transparent",
+      color:active?"#fff":"#1a1a1a",
+      cursor:"pointer",fontFamily:"inherit",fontWeight:active?500:400,
+    });
+    return <div style={nab}>
+      <div style={{...s.header,display:"flex",alignItems:"center",gap:12}}>
+        <button style={s.btnSm} onClick={()=>setView("home")}>← Back</button>
+        <h2 style={{...s.h1,margin:0}}>Start workout</h2>
+      </div>
+      <div style={s.section}>
+
+        {/* Last sessions */}
+        {templatesWithHistory.length>0&&<>
+          <p style={{fontSize:11,fontWeight:500,color:"#666",margin:"0 0 10px",textTransform:"uppercase",letterSpacing:"0.06em"}}>Repeat last session</p>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:24}}>
+            {templatesWithHistory.map(t=>{
+              const last=lastForTemplate(t);
+              return <button key={t.id} style={pillBtn(`Last ${t.name}`,null,true)} onClick={()=>repeatWorkout(last)}>
+                Last {t.name}
+              </button>;
+            })}
+          </div>
+        </>}
+
+        {/* OR divider */}
+        {templatesWithHistory.length>0&&<div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
+          <div style={{flex:1,height:1,background:"rgba(0,0,0,0.12)"}}/>
+          <span style={{fontSize:13,color:"#999",fontWeight:500}}>or</span>
+          <div style={{flex:1,height:1,background:"rgba(0,0,0,0.12)"}}/>
+        </div>}
+
+        {/* Fresh templates */}
+        <p style={{fontSize:11,fontWeight:500,color:"#666",margin:"0 0 10px",textTransform:"uppercase",letterSpacing:"0.06em"}}>Start fresh</p>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:24}}>
+          {templates.map(t=>(
+            <button key={t.id} style={pillBtn(t.name,null,false)} onClick={()=>startWorkout(t)}>
+              {t.name}
+            </button>
+          ))}
+        </div>
+
+        {/* Blank new workout */}
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+          <div style={{flex:1,height:1,background:"rgba(0,0,0,0.12)"}}/>
+          <span style={{fontSize:13,color:"#999",fontWeight:500}}>or</span>
+          <div style={{flex:1,height:1,background:"rgba(0,0,0,0.12)"}}/>
+        </div>
+        <button style={{...s.btn,width:"100%"}} onClick={()=>startWorkout()}>＋ New blank workout</button>
+      </div>
+      <Nav/>
+    </div>;
+  }
+
+  if(view==="history"){
+    const filtered=workouts.filter(w=>w.name.toLowerCase().includes(historyFilter.toLowerCase())||w.exercises.some(e=>e.name.toLowerCase().includes(historyFilter.toLowerCase())));
+    const grouped=filtered.reduce((a,w)=>{ const ws=gwStart(w.date); if(!a[ws])a[ws]=[]; a[ws].push(w); return a; },{});
+    const weeks=Object.keys(grouped).sort((a,b)=>b.localeCompare(a));
+    return <div style={nab}>
+      <div style={s.header}><h2 style={s.h1}>History</h2></div>
+      <div style={s.section}>
+        <input style={{...s.input,marginBottom:12}} placeholder="Search workouts or exercises..." value={historyFilter} onChange={e=>setHistoryFilter(e.target.value)}/>
+        <div style={{...s.card,marginBottom:10,padding:0,overflow:"hidden"}}>
+          <button style={{width:"100%",padding:"12px 14px",background:"transparent",border:"none",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"inherit"}} onClick={()=>setShowWeeklyWorkouts(v=>!v)}>
+            <span style={{fontWeight:500,fontSize:14}}>Weekly workouts</span>
+            <span style={{fontSize:12,color:"#666"}}>{showWeeklyWorkouts?"▲":"▼"}</span>
+          </button>
+          {showWeeklyWorkouts&&<div style={{borderTop:"0.5px solid rgba(0,0,0,0.12)"}}>
+            {weeks.length===0&&<p style={{padding:"10px 14px",fontSize:13,color:"#666",margin:0}}>No workouts logged yet.</p>}
+            {weeks.map(ws=>{ const isOpen=expandedWorkoutWeek===ws; return <div key={ws} style={{borderBottom:"0.5px solid rgba(0,0,0,0.06)"}}>
+              <button style={{width:"100%",padding:"10px 14px",background:"transparent",border:"none",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"inherit"}} onClick={()=>setExpandedWorkoutWeek(isOpen?null:ws)}>
+                <span style={{fontSize:13}}>{wLabel(ws)}</span>
+                <span style={{fontSize:11,color:"#666"}}>{grouped[ws].length} sessions {isOpen?"▲":"▼"}</span>
+              </button>
+              {isOpen&&<div style={{padding:"0 14px 10px"}}>
+                {grouped[ws].sort((a,b)=>b.date.localeCompare(a.date)).map(w=><div key={w.id} style={{...s.card,display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <div style={{flex:1,cursor:"pointer"}} onClick={()=>{setViewingWorkout(w);setView("viewWorkout");}}>
+                    <p style={{margin:0,fontWeight:500,fontSize:13}}>{w.name}</p>
+                    <p style={{margin:"2px 0 0",fontSize:11,color:"#666"}}>{w.date} · {w.exercises.length} ex · {Math.round(w.exercises.reduce((s,e)=>s+calcVol(e.sets),0)).toLocaleString()} kg vol</p>
+                  </div>
+                  <button style={{...tb,marginLeft:8}} onClick={()=>openEdit(w)}><PencilIcon/></button>
+                  <button style={{...tb,marginLeft:4}} onClick={e=>delClick(e,w.id)}><TrashIcon/></button>
+                </div>)}
+              </div>}
+            </div>;})}
+          </div>}
+        </div>
+        {weeklySets.length>0&&<div style={{...s.card,marginBottom:10,padding:0,overflow:"hidden"}}>
+          <button style={{width:"100%",padding:"12px 14px",background:"transparent",border:"none",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"inherit"}} onClick={()=>setShowWeeklySetsSection(v=>!v)}>
+            <span style={{fontWeight:500,fontSize:14}}>Weekly sets</span>
+            <span style={{fontSize:12,color:"#666"}}>{showWeeklySetsSection?"▲":"▼"}</span>
+          </button>
+          {showWeeklySetsSection&&<div style={{borderTop:"0.5px solid rgba(0,0,0,0.12)"}}>
+            {weeklySets.map(w=>{ const isOpen=expandedWeek===w.monStr; return <div key={w.monStr} style={{borderBottom:"0.5px solid rgba(0,0,0,0.06)"}}>
+              <button style={{width:"100%",padding:"10px 14px",background:"transparent",border:"none",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",fontFamily:"inherit"}} onClick={()=>setExpandedWeek(isOpen?null:w.monStr)}>
+                <span style={{fontSize:13}}>{fmtLocal(w.monStr)} – {fmtLocal(w.sunStr)}</span>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <button style={{...tb,padding:"3px 5px"}} onClick={e=>{e.stopPropagation();setEditingWeekSets(w.monStr);setEditWeekCounts({...w.counts});setExpandedWeek(w.monStr);}}><PencilIcon/></button>
+                  <button style={{...tb,padding:"3px 5px"}} onClick={e=>{e.stopPropagation();setWeeklySets(prev=>prev.filter(x=>x.monStr!==w.monStr));}}><TrashIcon/></button>
+                  <span style={{fontSize:11,color:"#666"}}>{isOpen?"▲":"▼"}</span>
+                </div>
+              </button>
+              {isOpen&&<div style={{padding:"8px 14px 12px"}}>
+                {editingWeekSets===w.monStr
+                  ?<>{MUSCLE_MAP.map(m=><div key={m.label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                      <span style={{fontSize:13,fontWeight:500,width:80,flexShrink:0}}>{m.label}</span>
+                      <input type="number" min="0" style={{...s.input,width:60,textAlign:"center",padding:"4px 6px",fontSize:13}} value={editWeekCounts[m.label]||0} onChange={e=>setEditWeekCounts(c=>({...c,[m.label]:parseInt(e.target.value)||0}))}/>
+                      <span style={{fontSize:12,color:"#666"}}>/ {SET_GOAL}</span>
+                    </div>)}
+                    <div style={{display:"flex",gap:8,marginTop:8}}>
+                      <button style={{...s.btnPrimary,flex:1}} onClick={()=>{setWeeklySets(prev=>prev.map(x=>x.monStr===w.monStr?{...x,counts:editWeekCounts}:x));setEditingWeekSets(null);}}>Save</button>
+                      <button style={s.btnSm} onClick={()=>setEditingWeekSets(null)}>Cancel</button>
+                    </div></>
+                  :<MuscleSetBars counts={w.counts} goal={SET_GOAL} small/>
+                }
+              </div>}
+            </div>;})}
+          </div>}
+        </div>}
+      </div>
+      <div style={{padding:"0 16px 24px"}}>
+        <p style={{fontSize:11,fontWeight:500,color:"#666",margin:"0 0 10px",textTransform:"uppercase",letterSpacing:"0.06em"}}>Data</p>
+        <div style={{display:"flex",gap:8}}>
+          <button style={{...s.btn,flex:1}} onClick={()=>{
+            const data={workouts,templates,archive,progress,bw,weeklySets,recentEx};
+            const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+            const url=URL.createObjectURL(blob);
+            const a=document.createElement("a");
+            a.href=url; a.download=`gym_backup_${dateFmt(new Date())}.json`; a.click();
+            URL.revokeObjectURL(url);
+          }}>⬇ Export backup</button>
+          <label style={{...s.btn,flex:1,textAlign:"center",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+            ⬆ Import backup
+            <input type="file" accept=".json" style={{display:"none"}} onChange={e=>{
+              const file=e.target.files[0]; if(!file)return;
+              const reader=new FileReader();
+              reader.onload=ev=>{
+                try{
+                  const d=JSON.parse(ev.target.result);
+                  if(d.workouts) setWorkouts(d.workouts);
+                  if(d.templates) setTemplates(d.templates);
+                  if(d.archive) setArchive(d.archive);
+                  if(d.progress) setProgress(d.progress);
+                  if(d.bw!==undefined) setBw(d.bw);
+                  if(d.weeklySets) setWeeklySets(d.weeklySets);
+                  if(d.recentEx) setRecentEx(d.recentEx);
+                  alert("Data imported successfully!");
+                }catch{ alert("Invalid backup file."); }
+              };
+              reader.readAsText(file);
+              e.target.value="";
+            }}/>
+          </label>
+        </div>
+      </div>
+      <Nav/>
+    </div>;
+  }
+  if(view==="prs"){
+    const pl=Object.entries(prs).sort((a,b)=>a[0].localeCompare(b[0]));
+    return <div style={nab}>
+      <div style={s.header}><h2 style={s.h1}>Personal Records</h2></div>
+      <div style={s.section}>
+        {pl.length===0&&<p style={{color:"#666",fontSize:14}}>Log some workouts to see your PRs here.</p>}
+        {pl.map(([name,rm],i)=><div key={name} style={{...s.card,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div><p style={{margin:0,fontWeight:500}}>{name}</p><p style={{margin:"2px 0 0",fontSize:12,color:"#666"}}>Est. 1RM</p></div>
+          <span style={{fontSize:11,padding:"2px 8px",borderRadius:20,background:COLORS[i%COLORS.length]+"22",color:COLORS[i%COLORS.length],fontWeight:500}}>{rm} kg</span>
+        </div>)}
+      </div>
+      <Nav/>
+    </div>;
+  }
+
+  if(view==="progress"){
+    const sunday=getSunday(), sortedP=[...progress].sort((a,b)=>b.date.localeCompare(a.date));
+    const alreadyLogged=sortedP.length>0&&sortedP[0].date>=sunday;
+    const chartData=[...progress].sort((a,b)=>a.date.localeCompare(b.date));
+    const chartColors={weight:"#5DCAA5",cals:"#7F77DD",protein:"#D85A30",carbs:"#378ADD",fats:"#BA7517"};
+    function saveCheckin(){ if(!pForm.weight)return; const entry={date:sunday,weight:parseFloat(pForm.weight),cals:parseFloat(pForm.cals)||0,protein:parseFloat(pForm.protein)||0,carbs:parseFloat(pForm.carbs)||0,fats:parseFloat(pForm.fats)||0}; setProgress(prev=>[...prev.filter(e=>e.date!==sunday),entry].sort((a,b)=>b.date.localeCompare(a.date))); setBw(parseFloat(pForm.weight)); setPForm({weight:"",cals:"",protein:"",carbs:"",fats:""}); setShowPForm(false); }
+    return <div style={nab}>
+      <div style={s.header}><h2 style={s.h1}>Progress</h2></div>
+      <div style={s.section}>
+        <div style={{...s.card,marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div><p style={{margin:0,fontWeight:500}}>Current bodyweight</p><p style={{margin:"2px 0 0",fontSize:12,color:"#666"}}>Used for BW button when logging</p></div>
+          {editingBw
+            ?<div style={{display:"flex",gap:8,alignItems:"center"}}><input autoFocus type="number" step="0.1" style={{...s.input,width:80,textAlign:"center"}} value={bwInput} onChange={e=>setBwInput(e.target.value)} placeholder="kg"/><button style={s.btnPrimary} onClick={()=>{if(!bwInput)return;setBw(parseFloat(bwInput));setEditingBw(false);}}>OK</button><button style={s.btnSm} onClick={()=>setEditingBw(false)}>✕</button></div>
+            :<div style={{display:"flex",alignItems:"center",gap:10}}><span style={{fontSize:20,fontWeight:500}}>{bw?`${bw}kg`:"—"}</span><button style={tb} onClick={()=>{setBwInput(bw||"");setEditingBw(true);}}><PencilIcon/></button></div>
+          }
+        </div>
+        {!showPForm
+          ?<button style={{...s.btnPrimary,width:"100%",padding:"12px",fontSize:15,marginBottom:16}} onClick={()=>{if(alreadyLogged)setPForm({weight:sortedP[0].weight,cals:sortedP[0].cals,protein:sortedP[0].protein,carbs:sortedP[0].carbs,fats:sortedP[0].fats});setShowPForm(true);}}>{alreadyLogged?"Edit this week's check-in":"+ Log week ending "+fmtDate(sunday)}</button>
+          :<div style={{...s.card,marginBottom:16}}>
+            <p style={{margin:"0 0 12px",fontWeight:500}}>Week ending {fmtDate(sunday)}</p>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+              {[["weight","Bodyweight (kg)"],["cals","Avg daily cals"],["protein","Avg protein (g)"],["carbs","Avg carbs (g)"],["fats","Avg fats (g)"]].map(([k,label])=><div key={k} style={{gridColumn:k==="weight"?"1/-1":"auto"}}><p style={{margin:"0 0 4px",fontSize:12,color:"#666"}}>{label}</p><input type="number" style={s.input} placeholder="0" value={pForm[k]} onChange={e=>setPForm(f=>({...f,[k]:e.target.value}))}/></div>)}
+            </div>
+            <div style={{display:"flex",gap:8,marginTop:8}}><button style={{...s.btnPrimary,flex:1}} onClick={saveCheckin}>Save</button><button style={s.btnSm} onClick={()=>setShowPForm(false)}>Cancel</button></div>
+          </div>
+        }
+        {sortedP.length>0&&<div style={{...s.card,marginBottom:16}}>
+          <p style={{margin:"0 0 10px",fontWeight:500,fontSize:13}}>Latest — {fmtDate(sortedP[0].date)}</p>
+          <div style={{display:"flex",gap:0,alignItems:"stretch"}}>
+            <div style={{flex:1,textAlign:"center"}}><p style={{margin:0,fontSize:20,fontWeight:500}}>{sortedP[0].weight}</p><p style={{margin:"2px 0 0",fontSize:11,color:"#666"}}>kg</p></div>
+            <div style={{width:1,background:"#000",margin:"4px 0"}}/>
+            <div style={{flex:1,textAlign:"center"}}><p style={{margin:0,fontSize:20,fontWeight:500}}>{sortedP[0].cals}</p><p style={{margin:"2px 0 0",fontSize:11,color:"#666"}}>cals</p></div>
+            <div style={{width:1,background:"#000",margin:"4px 0"}}/>
+            <div style={{flex:1,textAlign:"center"}}><p style={{margin:0,fontSize:20,fontWeight:500}}>{sortedP[0].protein}g</p><p style={{margin:"2px 0 0",fontSize:11,color:"#666"}}>protein</p></div>
+          </div>
+        </div>}
+        {chartData.length>1&&<>
+          <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+            {[["weight","Weight"],["cals","Cals"],["protein","Protein"],["carbs","Carbs"],["fats","Fats"]].map(([k,l])=><button key={k} style={{...s.btnSm,background:pChartKey===k?"#f5f5f5":"transparent",fontWeight:pChartKey===k?500:400}} onClick={()=>setPChartKey(k)}>{l}</button>)}
+          </div>
+          <LineChart data={chartData} valueKey={pChartKey} color={chartColors[pChartKey]}/>
+        </>}
+        {sortedP.length>0&&<div style={{marginTop:16}}>
+          <p style={{fontSize:11,fontWeight:500,color:"#666",margin:"0 0 8px",textTransform:"uppercase",letterSpacing:"0.06em"}}>Check-in history</p>
+          {sortedP.map(e=><div key={e.date} style={{...s.card,fontSize:13}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}><p style={{margin:0,fontWeight:500}}>{fmtDate(e.date)}</p><button style={{...s.btnSm,fontSize:11,color:"#e24b4a"}} onClick={()=>setProgress(p=>p.filter(x=>x.date!==e.date))}>Remove</button></div>
+            <p style={{margin:0,color:"#666"}}>{e.weight}kg · {e.cals} cals · {e.protein}g P · {e.carbs}g C · {e.fats}g F</p>
+          </div>)}
+        </div>}
+      </div>
+      <Nav/>
+    </div>;
+  }
+
+  if(view==="archive"){
+    const ARCHIVE_GROUPS=[
+      {label:"Chest",     keywords:["chest"]},
+      {label:"Back",      keywords:["back"]},
+      {label:"Shoulders", keywords:["shoulder"]},
+      {label:"Legs",      keywords:["leg"]},
+      {label:"Biceps",    keywords:["bicep"]},
+      {label:"Triceps",   keywords:["tricep"]},
+      {label:"Core",      keywords:["core"]},
+    ];
+    function getGroup(name){ const lower=name.toLowerCase(); for(const g of ARCHIVE_GROUPS){ if(g.keywords.some(kw=>lower.includes(kw))) return g.label; } return "Other"; }
+    const order=[...ARCHIVE_GROUPS.map(g=>g.label),"Other"];
+    const grouped={}; order.forEach(g=>{grouped[g]=[];});
+    archive.forEach(ex=>{ const g=getGroup(ex); grouped[g].push(ex); });
+    const filteredGroups=order.map(g=>({label:g,exercises:grouped[g].filter(e=>e.toLowerCase().includes(archiveSearch.toLowerCase()))})).filter(g=>g.exercises.length>0);
+    return <div style={nab}>
+      <div style={{...s.header,display:"flex",alignItems:"center",gap:12}}><button style={s.btnSm} onClick={()=>setView("home")}>← Back</button><h2 style={{...s.h1,margin:0}}>Exercise archive</h2></div>
+      <div style={s.section}>
+        <input style={{...s.input,marginBottom:12}} placeholder="Search exercises..." value={archiveSearch} onChange={e=>setArchiveSearch(e.target.value)}/>
+        {archive.length===0&&<p style={{fontSize:14,color:"#666"}}>No exercises yet. Add some below.</p>}
+        {filteredGroups.map(g=><div key={g.label} style={{marginBottom:16}}>
+          <p style={{fontSize:11,fontWeight:500,color:"#666",margin:"0 0 8px",textTransform:"uppercase",letterSpacing:"0.06em"}}>{g.label}</p>
+          {g.exercises.map(ex=><div key={ex} style={{...s.card,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",marginBottom:6}}>
+            {editingEx===ex
+              ?<div style={{display:"flex",gap:8,flex:1}}>
+                <input autoFocus style={{...s.input,flex:1}} value={editExName} onChange={e=>setEditExName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&(()=>{if(!editExName.trim())return;setArchive(a=>a.map(x=>x===ex?editExName.trim():x).sort());setEditingEx(null);})()}/>
+                <button style={s.btnPrimary} onClick={()=>{if(!editExName.trim())return;setArchive(a=>a.map(x=>x===ex?editExName.trim():x).sort());setEditingEx(null);}}>OK</button>
+                <button style={s.btnSm} onClick={()=>setEditingEx(null)}>Cancel</button>
+              </div>
+              :<><p style={{margin:0,fontSize:14}}>{ex}</p>
+                <div style={{display:"flex",gap:4}}>
+                  <button style={tb} onClick={()=>{setEditingEx(ex);setEditExName(ex);}}><PencilIcon/></button>
+                  <button style={tb} onClick={()=>setArchive(a=>a.filter(x=>x!==ex))}><TrashIcon/></button>
+                </div>
+              </>
+            }
+          </div>)}
+        </div>)}
+        <div style={{marginTop:8,borderTop:"0.5px solid rgba(0,0,0,0.12)",paddingTop:12}}>
+          {editingEx==="__new__"
+            ?<div style={{display:"flex",gap:8}}>
+              <input autoFocus style={{...s.input,flex:1}} placeholder="Exercise name..." value={editExName} onChange={e=>setEditExName(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&editExName.trim()){setArchive(a=>[...a,editExName.trim()].sort());setEditExName("");setEditingEx(null);}}}/>
+              <button style={s.btnPrimary} onClick={()=>{if(!editExName.trim())return;setArchive(a=>[...a,editExName.trim()].sort());setEditExName("");setEditingEx(null);}}>Add</button>
+              <button style={s.btnSm} onClick={()=>{setEditingEx(null);setEditExName("");}}>Cancel</button>
+            </div>
+            :<button style={{...s.btn,width:"100%"}} onClick={()=>{setEditingEx("__new__");setEditExName("");}}>+ Add exercise</button>
+          }
+        </div>
+      </div>
+    </div>;
+  }
+
+  if(view==="templates"){
+    const ARCHIVE_GROUPS=[
+      {label:"Chest",     keywords:["chest"]},
+      {label:"Back",      keywords:["back"]},
+      {label:"Shoulders", keywords:["shoulder"]},
+      {label:"Legs",      keywords:["leg"]},
+      {label:"Biceps",    keywords:["bicep"]},
+      {label:"Triceps",   keywords:["tricep"]},
+      {label:"Core",      keywords:["core"]},
+    ];
+    function getGroup(name){ const lower=name.toLowerCase(); for(const g of ARCHIVE_GROUPS){ if(g.keywords.some(kw=>lower.includes(kw))) return g.label; } return "Other"; }
+    const order=[...ARCHIVE_GROUPS.map(g=>g.label),"Other"];
+
+    function ExercisePicker({ selected, onChange }){
+      const grouped={}; order.forEach(g=>{grouped[g]=[];});
+      archive.forEach(ex=>{ const g=getGroup(ex); grouped[g].push(ex); });
+      const groups=order.map(g=>({label:g,exercises:grouped[g]})).filter(g=>g.exercises.length>0);
+      const toggle=(ex)=>{ if(selected.includes(ex)) onChange(selected.filter(e=>e!==ex)); else onChange([...selected,ex]); };
+      return <div style={{marginBottom:8}}>
+        {archive.length===0&&<p style={{fontSize:13,color:"#666",margin:"0 0 8px"}}>No exercises in archive yet.</p>}
+        {groups.map(g=><div key={g.label} style={{marginBottom:12}}>
+          <p style={{fontSize:11,fontWeight:500,color:"#666",margin:"0 0 6px",textTransform:"uppercase",letterSpacing:"0.06em"}}>{g.label}</p>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {g.exercises.map(ex=>{
+              const on=selected.includes(ex);
+              return <button key={ex} onClick={()=>toggle(ex)} style={{padding:"6px 12px",fontSize:12,borderRadius:20,border:on?"none":"0.5px solid rgba(0,0,0,0.2)",background:on?"#1a1a1a":"transparent",color:on?"#fff":"#1a1a1a",cursor:"pointer",fontFamily:"inherit"}}>
+                {on?"✓ ":""}{ex}
+              </button>;
+            })}
+          </div>
+        </div>)}
+        {selected.length>0&&<div style={{marginTop:8,paddingTop:8,borderTop:"0.5px solid rgba(0,0,0,0.08)"}}>
+          <p style={{fontSize:11,color:"#666",margin:"0 0 6px"}}>Selected order:</p>
+          {selected.map((ex,i)=><div key={ex} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 0"}}>
+            <span style={{fontSize:13}}>{i+1}. {ex}</span>
+            <div style={{display:"flex",gap:4}}>
+              {i>0&&<button style={{...s.btnSm,padding:"2px 8px"}} onClick={()=>{const a=[...selected];[a[i-1],a[i]]=[a[i],a[i-1]];onChange(a);}}>↑</button>}
+              {i<selected.length-1&&<button style={{...s.btnSm,padding:"2px 8px"}} onClick={()=>{const a=[...selected];[a[i],a[i+1]]=[a[i+1],a[i]];onChange(a);}}>↓</button>}
+            </div>
+          </div>)}
+        </div>}
+      </div>;
+    }
+
+    return <div style={nab}>
+      <div style={s.header}><h2 style={s.h1}>Templates</h2></div>
+      <div style={s.section}>
+        {templates.map(t=><div key={t.id} style={s.card}>
+          {editingTemplate===t.id
+            ?<div>
+              <p style={{margin:"0 0 4px",fontSize:12,color:"#666"}}>Template name</p>
+              <input style={{...s.input,marginBottom:12}} value={editTemplateName} onChange={e=>setEditTemplateName(e.target.value)}/>
+              <p style={{margin:"0 0 8px",fontSize:12,color:"#666"}}>Tap to add exercises:</p>
+              <ExercisePicker selected={editTemplateExercises.split("\n").map(e=>e.trim()).filter(Boolean)} onChange={v=>setEditTemplateExercises(v.join("\n"))}/>
+              <div style={{display:"flex",gap:8,marginTop:8}}>
+                <button style={{...s.btnPrimary,flex:1}} onClick={()=>{const exs=editTemplateExercises.split("\n").map(e=>e.trim()).filter(Boolean);if(!editTemplateName.trim())return;setTemplates(p=>p.map(x=>x.id===t.id?{...x,name:editTemplateName.trim(),exercises:exs}:x));setEditingTemplate(null);}}>Save</button>
+                <button style={s.btnSm} onClick={()=>setEditingTemplate(null)}>Cancel</button>
+              </div>
+            </div>
+            :<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div style={{flex:1}}><p style={{margin:"0 0 4px",fontWeight:500}}>{t.name}</p><p style={{margin:0,fontSize:12,color:"#666"}}>{t.exercises.length>0?t.exercises.join(" · "):"No exercises yet"}</p></div>
+              <div style={{display:"flex",gap:6,marginLeft:8}}>
+                <button style={s.btnSm} onClick={()=>startWorkout(t)}>Use</button>
+                <button style={tb} onClick={()=>{setEditingTemplate(t.id);setEditTemplateName(t.name);setEditTemplateExercises(t.exercises.join("\n"));}}><PencilIcon/></button>
+                <button style={tb} onClick={()=>setTemplates(p=>p.filter(x=>x.id!==t.id))}><TrashIcon/></button>
+              </div>
+            </div>
+          }
+        </div>)}
+        {addingTemplate
+          ?<div style={s.card}>
+            <p style={{margin:"0 0 8px",fontWeight:500}}>New template</p>
+            <p style={{margin:"0 0 4px",fontSize:12,color:"#666"}}>Template name</p>
+            <input style={{...s.input,marginBottom:12}} placeholder="e.g. Push Day" value={newTemplateName} onChange={e=>setNewTemplateName(e.target.value)}/>
+            <p style={{margin:"0 0 8px",fontSize:12,color:"#666"}}>Tap to add exercises:</p>
+            <ExercisePicker selected={newTemplateExercises.split("\n").map(e=>e.trim()).filter(Boolean)} onChange={v=>setNewTemplateExercises(v.join("\n"))}/>
+            <div style={{display:"flex",gap:8,marginTop:8}}>
+              <button style={{...s.btnPrimary,flex:1}} onClick={()=>{const exs=newTemplateExercises.split("\n").map(e=>e.trim()).filter(Boolean);if(!newTemplateName.trim())return;setTemplates(p=>[...p,{id:Date.now(),name:newTemplateName.trim(),exercises:exs}]);setNewTemplateName("");setNewTemplateExercises("");setAddingTemplate(false);}}>Save template</button>
+              <button style={s.btnSm} onClick={()=>setAddingTemplate(false)}>Cancel</button>
+            </div>
+          </div>
+          :<button style={{...s.btn,width:"100%",marginTop:4}} onClick={()=>setAddingTemplate(true)}>+ Add new template</button>
+        }
+      </div>
+      <Nav/>
+    </div>;
+  }
+
+  return null;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>
