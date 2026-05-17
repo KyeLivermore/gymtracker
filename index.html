@@ -47,7 +47,7 @@ const MUSCLE_MAP = [
   { label:"Legs",      keywords:["leg"] },
   { label:"Calves",    keywords:["calf","calves"] },
 ];
-const SET_GOAL = 20;
+const SET_GOAL = 12;
 const BAR_COLOR = "#555555";
 const COLORS = ["#5DCAA5","#7F77DD","#D85A30","#378ADD","#BA7517","#D4537E","#639922"];
 const NAV_H = 58;
@@ -84,7 +84,7 @@ function Modal({ title, message, confirmLabel="Confirm", confirmColor="#E24B4A",
   </div>;
 }
 
-function ExerciseCard({ ex, prs, s, onChange, onRemove, latestBW, prevData }){
+function ExerciseCard({ ex, prs, s, onChange, onRemove, onMoveUp, onMoveDown, canMoveUp, canMoveDown, latestBW, prevData }){
   const [open,setOpen]=useState(true);
   function upd(si,f,v){ const sets=[...ex.sets]; sets[si]={...sets[si],[f]:v}; onChange({...ex,sets}); }
 
@@ -97,6 +97,18 @@ function ExerciseCard({ ex, prs, s, onChange, onRemove, latestBW, prevData }){
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:open?10:0}}>
       <input style={{...s.input,fontWeight:500,flex:1,marginRight:8}} placeholder="Exercise name" value={ex.name} onChange={e=>onChange({...ex,name:e.target.value})}/>
       <div style={{display:"flex",gap:6}}>
+        <button
+          style={{...s.btnSm,opacity:canMoveUp?1:0.35}}
+          disabled={!canMoveUp}
+          onClick={onMoveUp}
+          title="Move exercise up"
+        >↑</button>
+        <button
+          style={{...s.btnSm,opacity:canMoveDown?1:0.35}}
+          disabled={!canMoveDown}
+          onClick={onMoveDown}
+          title="Move exercise down"
+        >↓</button>
         <button style={s.btnSm} onClick={()=>setOpen(o=>!o)}>{open?"−":"+"}</button>
         <button style={{...s.btnSm,color:"#e24b4a"}} onClick={onRemove}>✕</button>
       </div>
@@ -161,6 +173,20 @@ function WorkoutForm({ workout, setWorkout, prs, recentExercises, archive, setAr
     <div style={s.section}>
       {workout.exercises.map((ex,ei)=>(
         <ExerciseCard key={ei} ex={ex} prs={prs} s={s} latestBW={latestBW} prevData={getPrevData(ex.name)}
+          canMoveUp={ei>0}
+          canMoveDown={ei<workout.exercises.length-1}
+          onMoveUp={()=>setWorkout(w=>{
+            if(ei===0) return w;
+            const exs=[...w.exercises];
+            [exs[ei-1],exs[ei]]=[exs[ei],exs[ei-1]];
+            return {...w,exercises:exs};
+          })}
+          onMoveDown={()=>setWorkout(w=>{
+            if(ei>=w.exercises.length-1) return w;
+            const exs=[...w.exercises];
+            [exs[ei],exs[ei+1]]=[exs[ei+1],exs[ei]];
+            return {...w,exercises:exs};
+          })}
           onChange={u=>setWorkout(w=>{const exs=[...w.exercises];exs[ei]=u;return{...w,exercises:exs};})}
           onRemove={()=>setWorkout(w=>({...w,exercises:w.exercises.filter((_,i)=>i!==ei)}))}/>
       ))}
@@ -213,14 +239,28 @@ function LineChart({ data, valueKey, color="#5DCAA5" }){
 
 function MuscleSetBars({ counts, goal, small }){
   return MUSCLE_MAP.map(m=>{
-    const sets=Math.min(counts[m.label]||0,goal), pct=sets/goal;
+    const actualSets = counts[m.label] || 0;
+    const displaySets = actualSets;
+    const barSets = Math.min(actualSets, goal);
+    const pct = barSets / goal;
+    const progressColor =
+      actualSets <= 5 ? "#E24B4A" :
+      actualSets <= 11 ? "#E0B03D" :
+      "#3BA55D";
+
     return <div key={m.label} style={{marginBottom:small?6:10}}>
       <div style={{display:"flex",justifyContent:"space-between",marginBottom:small?2:4}}>
         <span style={{fontSize:small?11:13,fontWeight:500}}>{m.label}</span>
-        <span style={{fontSize:small?10:12,color:"#666"}}>{sets}/{goal}</span>
+        <span style={{fontSize:small?10:12,color:"#666"}}>{displaySets}/{goal}</span>
       </div>
       <div style={{height:small?5:8,background:"#f0f0f0",borderRadius:99,overflow:"hidden"}}>
-        <div style={{height:"100%",width:`${pct*100}%`,background:BAR_COLOR,borderRadius:99,transition:"width 0.3s ease"}}/>
+        <div style={{
+          height:"100%",
+          width:`${pct*100}%`,
+          background:progressColor,
+          borderRadius:99,
+          transition:"width 0.3s ease, background 0.3s ease"
+        }}/>
       </div>
     </div>;
   });
