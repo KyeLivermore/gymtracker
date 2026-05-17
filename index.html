@@ -143,7 +143,7 @@ function WorkoutForm({ workout, setWorkout, prs, recentExercises, archive, setAr
   const [addingNew,setAddingNew]=useState(false);
   const [newExName,setNewExName]=useState("");
   const [confirmDiscard,setConfirmDiscard]=useState(false);
-  function addFromPicker(name){ setWorkout(w=>({...w,exercises:[...w.exercises,{name,sets:[{sets:3,reps:10,weight:""}]}]})); pushRecentEx(name); setShowPicker(false); setPickerSearch(""); }
+  function addFromPicker(name){ setWorkout(w=>({...w,exercises:[...w.exercises,{name,sets:[{sets:1,reps:10,weight:""}]}]})); pushRecentEx(name); setShowPicker(false); setPickerSearch(""); }
   function addNewEx(){ if(!newExName.trim())return; const n=newExName.trim(); if(!archive.includes(n)) setArchive(a=>[...a,n].sort()); addFromPicker(n); setNewExName(""); setAddingNew(false); }
   const filtered=recentExercises.filter(e=>e.toLowerCase().includes(pickerSearch.toLowerCase()));
   const exactMatch=archive.some(e=>e.toLowerCase()===pickerSearch.toLowerCase().trim());
@@ -305,7 +305,7 @@ function App(){
 
   function pushRecentEx(name){ setRecentEx(prev=>[name,...prev.filter(e=>e!==name)]); }
   function fmtName(t){ const n=new Date(),day=n.toLocaleDateString("en-AU",{weekday:"short"}).toLowerCase(),mon=n.toLocaleDateString("en-AU",{month:"short"}).toLowerCase(),short=t?t.split(" ")[0].toLowerCase():"workout"; return `${short} | ${day} | ${mon} ${n.getDate()}`; }
-  function startWorkout(template=null){ setActiveWorkout({name:fmtName(template?.name),date:new Date().toISOString().split("T")[0],notes:"",exercises:template?template.exercises.map(n=>({name:n,sets:[{sets:3,reps:10,weight:""}]})):[]}); setView("log"); }
+  function startWorkout(template=null){ setActiveWorkout({name:fmtName(template?.name),date:new Date().toISOString().split("T")[0],notes:"",exercises:template?template.exercises.map(n=>({name:n,sets:[{sets:1,reps:10,weight:""}]})):[]}); setView("log"); }
   function repeatWorkout(prev){ const base=prev.name.split(" | ")[0]; setActiveWorkout({name:fmtName(base.charAt(0).toUpperCase()+base.slice(1)),date:new Date().toISOString().split("T")[0],notes:"",exercises:prev.exercises.map(e=>({name:e.name,sets:e.sets.map(s=>({...s}))}))}); setView("log"); }
   function saveWorkout(){
     if(!activeWorkout)return;
